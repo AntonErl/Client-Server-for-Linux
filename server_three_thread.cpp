@@ -12,15 +12,22 @@
 #include <thread>
 #include <mutex>
 
-using namespace std;
+struct Message
+{
+    int client = 0;
+    std::string data = "";
+    Message(int client, std::string data)
+    {
+        this->client = client;
+        this->data = data;
+    }
+};
 
-set<int> clients;
+std::set<int> clients;
 std::mutex mutex_Buf_Read;
 std::mutex mutex_Buf_Write;
-std::queue<std::string> g_BufRead;
-std::queue<std::string> g_BufWrite;
-std::queue<int> g_BufReadClient;
-std::queue<int> g_BufWriteClient;
+std::queue<Message> g_BufRead;
+std::queue<Message> g_BufWrite;
 
 std::string exec(const char *cmd)
 {
@@ -29,35 +36,32 @@ std::string exec(const char *cmd)
     FILE *pipe = popen(cmd, "r");
     if (!pipe)
         throw std::runtime_error("popen() failed!");
-    try
+
+    while (fgets(buffer, sizeof buffer, pipe) != NULL)
     {
-        while (fgets(buffer, sizeof buffer, pipe) != NULL)
-        {
-            result += buffer;
-        }
+        result += buffer;
     }
-    catch (...)
-    {
-        pclose(pipe);
-        throw;
-    }
+
     pclose(pipe);
     return result;
 }
 
 void in_data(int listener)
 {
+    bool flag = true; //управляющая переменная для while
     char buf[1024];
     int bytes_read;
-    while (1)
+    while (flag)
     {
         // Заполняем множество сокетов
         fd_set readset;
         FD_ZERO(&readset);
         FD_SET(listener, &readset);
 
-        for (set<int>::iterator it = clients.begin(); it != clients.end(); it++)
-            FD_SET(*it, &readset);
+        for (int client : clients)
+        {
+            FD_SET(client, &readset);
+        }
 
         // Задаём таймаут
         timeval timeout;
@@ -65,7 +69,7 @@ void in_data(int listener)
         timeout.tv_usec = 0;
 
         // Ждём события в одном из сокетов
-        int mx = max(listener, *max_element(clients.begin(), clients.end()));
+        int mx = std::max(listener, *std::max_element(clients.begin(), clients.end()));
         if (select(mx + 1, &readset, NULL, NULL, &timeout) <= 0)
         {
             perror("select");
@@ -86,34 +90,40 @@ void in_data(int listener)
             clients.insert(sock);
         }
 
-        for (set<int>::iterator it = clients.begin(); it != clients.end(); it++)
+        for (int client : clients)
         {
-            if (FD_ISSET(*it, &readset))
+            if (FD_ISSET(client, &readset))
             {
                 // Поступили данные от клиента, читаем их
-                bytes_read = recv(*it, buf, 1024, 0);
+                bytes_read = recv(client, buf, sizeof buf, 0);
 
                 if (bytes_read <= 0)
                 {
                     // Соединение разорвано, удаляем сокет из множества
-                    close(*it);
-                    clients.erase(*it);
+                    close(client);
+                    clients.erase(client);
                     continue;
                 }
                 mutex_Buf_Read.lock();
-                g_BufRead.push(buf);
-                g_BufReadClient.push(*it);
+                g_BufRead.push(Message(client, buf));
                 mutex_Buf_Read.unlock();
             }
         }
     }
+    for (int client : clients)
+    {
+        close(client);
+    }
+    close(listener);
 }
 void out_data()
 {
+    bool flag = true; //управляющая переменная для while
     std::string result_command;
-    int cl;
+    Message result(0, "NuN");
+    int client;
     int count = 0;
-    while (1)
+    while (flag)
     {
         if (count < 24)
         {
@@ -125,12 +135,12 @@ void out_data()
             else
             {
                 mutex_Buf_Write.lock();
-                result_command = g_BufWrite.front();
+                result = g_BufWrite.front();
+                client = result.client;
+                result_command = result.data;
                 g_BufWrite.pop();
-                cl = g_BufWriteClient.front();
-                g_BufWriteClient.pop();
                 mutex_Buf_Write.unlock();
-                send(cl, result_command.c_str(), 1024, 0);
+                send(client, result_command.c_str(), 1024, 0);
                 count = 0;
             }
         }
@@ -142,8 +152,9 @@ void out_data()
 }
 void run_command()
 {
+    bool flag = true; //управляющая переменная для while
     int count = 0;
-    while (1)
+    while (flag)
     {
         if (count < 24)
         {
@@ -154,18 +165,18 @@ void run_command()
             }
             else
             {
+                Message result(0, "NuN");
                 std::string command;
                 int client = 0;
                 mutex_Buf_Read.lock();
-                command = g_BufRead.front();
-                client = g_BufReadClient.front();
+                result = g_BufRead.front();
+                client = result.client;
+                command = result.data;
                 g_BufRead.pop();
-                g_BufReadClient.pop();
                 mutex_Buf_Read.unlock();
                 std::string result_command = exec(command.c_str());
                 mutex_Buf_Write.lock();
-                g_BufWrite.push(result_command);
-                g_BufWriteClient.push(client);
+                g_BufWrite.push(Message(client, result_command));
                 mutex_Buf_Write.unlock();
                 count = 0;
             }
@@ -181,6 +192,7 @@ int main()
 {
     int listener;
     struct sockaddr_in addr;
+    int max_size_queue = 20;
 
     listener = socket(AF_INET, SOCK_STREAM, 0);
     if (listener < 0)
@@ -198,10 +210,9 @@ int main()
         exit(2);
     }
 
-    listen(listener, 20);
+    listen(listener, max_size_queue);
     clients.clear();
 
-    /////////////////////////////////////
     std::thread thread_in_data(in_data, listener);
     std::thread thread_run_command(run_command);
     std::thread thread_out_data(out_data);
@@ -212,7 +223,7 @@ int main()
         thread_run_command.join();
     if (thread_out_data.joinable())
         thread_out_data.join();
-    /////////////////////////////////////
+
     std::cout << "close server" << std::endl;
     close(listener); //закрываем сокет сервера
     return 0;
