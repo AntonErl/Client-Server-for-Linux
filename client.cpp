@@ -22,6 +22,18 @@ int main(int argc, const char **argv)
         perror("socket");
         exit(1);
     }
+
+    // Указываем параметры сервера
+    addr.sin_family = AF_INET;                     // домены Internet
+    addr.sin_port = htons(3425);                   // или любой другой порт...
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // IP-адрес
+
+    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    {
+        perror("connect");
+        exit(2);
+    }
+
     std::string commands = "start";
     while (commands != "exit")
     {
@@ -32,25 +44,6 @@ int main(int argc, const char **argv)
         {
 
             char buf[1024];
-
-            sock = socket(AF_INET, SOCK_STREAM, 0); // создание TCP-сокета
-            if (sock < 0)
-            {
-                perror("socket");
-                exit(1);
-            }
-
-            // Указываем параметры сервера
-            addr.sin_family = AF_INET;                     // домены Internet
-            addr.sin_port = htons(3425);                   // или любой другой порт...
-            addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // IP-адрес
-
-            if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-            {
-                perror("connect");
-                exit(2);
-            }
-
             send(sock, commands.c_str(), mess_len + 1, 0);
             recv(sock, buf, sizeof buf, 0);
             std::cout << buf << std::endl;
