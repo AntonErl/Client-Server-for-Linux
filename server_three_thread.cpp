@@ -4,13 +4,15 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <algorithm>
 #include <set>
 #include <queue>
 #include <iostream>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
+#include <csignal>
+#include <signal.h>
 
 struct Message
 {
@@ -22,6 +24,12 @@ struct Message
         this->data = data;
     }
 };
+
+std::condition_variable read_cond_var;
+std::condition_variable write_cond_var;
+volatile bool done = true; //управляющая переменная для while
+bool read_notified = false;
+bool write_notified = false;
 
 std::set<int> clients;
 std::mutex mutex_Buf_Read;
@@ -46,12 +54,18 @@ std::string exec(const char *cmd)
     return result;
 }
 
+/*void signalHandler(int signum)
+{
+    done = false;
+    std::cout << "close server" << std::endl;
+}*/
+
 void in_data(int listener)
 {
-    bool flag = true; //управляющая переменная для while
+    //std::signal(SIGINT, signalHandler);
     char buf[1024];
     int bytes_read;
-    while (flag)
+    while (done)
     {
         // Заполняем множество сокетов
         fd_set readset;
@@ -72,6 +86,11 @@ void in_data(int listener)
         int mx = std::max(listener, *std::max_element(clients.begin(), clients.end()));
         if (select(mx + 1, &readset, NULL, NULL, &timeout) <= 0)
         {
+            done = false;
+            read_notified = true;
+            write_notified = true;
+            read_cond_var.notify_one();
+            write_cond_var.notify_one();
             perror("select");
             exit(3);
         }
@@ -104,9 +123,10 @@ void in_data(int listener)
                     clients.erase(client);
                     continue;
                 }
-                mutex_Buf_Read.lock();
+                std::unique_lock<std::mutex> read_lock(mutex_Buf_Read);
                 g_BufRead.push(Message(client, buf));
-                mutex_Buf_Read.unlock();
+                read_notified = true;
+                read_cond_var.notify_one();
             }
         }
     }
@@ -114,82 +134,66 @@ void in_data(int listener)
     {
         close(client);
     }
-    close(listener);
+    close(listener); //закрываем сокет сервера
 }
 void out_data()
 {
-    bool flag = true; //управляющая переменная для while
+    //std::signal(SIGINT, signalHandler);
     std::string result_command;
     Message result(0, "NuN");
     int client;
-    int count = 0;
-    while (flag)
+    while (done)
     {
-        if (count < 24)
-        {
-            if (g_BufWrite.empty())
-            {
-                sleep(5);
-                count++;
-            }
-            else
-            {
-                mutex_Buf_Write.lock();
-                result = g_BufWrite.front();
-                client = result.client;
-                result_command = result.data;
-                g_BufWrite.pop();
-                mutex_Buf_Write.unlock();
-                send(client, result_command.c_str(), 1024, 0);
-                count = 0;
-            }
+        std::unique_lock<std::mutex> write_lock(mutex_Buf_Write);
+        while (!write_notified)
+        { // loop to avoid spurious wakeups
+            write_cond_var.wait(write_lock);
         }
-        else
+        while (!g_BufWrite.empty())
         {
-            break;
+            result = g_BufWrite.front();
+            client = result.client;
+            result_command = result.data;
+            g_BufWrite.pop();
+            send(client, result_command.c_str(), 1024, 0);
         }
+        write_notified = false;
     }
 }
 void run_command()
 {
-    bool flag = true; //управляющая переменная для while
-    int count = 0;
-    while (flag)
+    //std::signal(SIGINT, signalHandler);
+    while (done)
     {
-        if (count < 24)
-        {
-            if (g_BufRead.empty())
-            {
-                sleep(5);
-                count++;
-            }
-            else
-            {
-                Message result(0, "NuN");
-                std::string command;
-                int client = 0;
-                mutex_Buf_Read.lock();
-                result = g_BufRead.front();
-                client = result.client;
-                command = result.data;
-                g_BufRead.pop();
-                mutex_Buf_Read.unlock();
-                std::string result_command = exec(command.c_str());
-                mutex_Buf_Write.lock();
-                g_BufWrite.push(Message(client, result_command));
-                mutex_Buf_Write.unlock();
-                count = 0;
-            }
+        std::unique_lock<std::mutex> read_lock(mutex_Buf_Read);
+        while (!read_notified)
+        { // loop to avoid spurious wakeups
+            read_cond_var.wait(read_lock);
         }
-        else
+        while (!g_BufRead.empty())
         {
-            break;
+            Message result(0, "NuN");
+            std::string command;
+            int client = 0;
+            result = g_BufRead.front();
+            client = result.client;
+            command = result.data;
+            g_BufRead.pop();
+            std::string result_command = exec(command.c_str());
+            std::unique_lock<std::mutex> write_lock(mutex_Buf_Write);
+            g_BufWrite.push(Message(client, result_command));
+            write_notified = true;
+            write_cond_var.notify_one();
         }
+        read_notified = false;
     }
 }
 
 int main()
 {
+
+    //std::signal(SIGINT, signalHandler);
+
     int listener;
     struct sockaddr_in addr;
     int max_size_queue = 20;
@@ -211,7 +215,6 @@ int main()
     }
 
     listen(listener, max_size_queue);
-    clients.clear();
 
     std::thread thread_in_data(in_data, listener);
     std::thread thread_run_command(run_command);
@@ -225,6 +228,6 @@ int main()
         thread_out_data.join();
 
     std::cout << "close server" << std::endl;
-    close(listener); //закрываем сокет сервера
+
     return 0;
 }
