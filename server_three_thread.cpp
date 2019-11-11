@@ -73,7 +73,7 @@ void signalHandler(int signum)
 
 void in_data(int listener)
 {
-    std::signal(SIGINT, signalHandler);
+    //std::signal(SIGINT, signalHandler);
     char buf[1024];
     int bytes_read;
     if (done == false)
@@ -112,6 +112,7 @@ void in_data(int listener)
             perror("select");
             exit(3);
         }
+      
 
         // Определяем тип события и выполняем соответствующие действия
         if (FD_ISSET(listener, &readset))
@@ -148,23 +149,19 @@ void in_data(int listener)
             }
         }
     }
-    for (int client : clients)
-    {
-        close(client);
-    }
-    close(listener); //закрываем сокет сервера
+
 }
 void out_data()
 {
-    std::signal(SIGINT, signalHandler);
+    //std::signal(SIGINT, signalHandler);
     std::string result_command;
-    Message result(0, "NuN");
+    Message result(0, "NULL");
     int client;
     while (done)
     {
         std::unique_lock<std::mutex> write_lock(mutex_Buf_Write);
         while (!write_notified)
-        { // loop to avoid spurious wakeups
+        {  
             write_cond_var.wait(write_lock);
         }
         while (!g_BufWrite.empty())
@@ -180,12 +177,12 @@ void out_data()
 }
 void run_command()
 {
-    std::signal(SIGINT, signalHandler);
+    //std::signal(SIGINT, signalHandler);
     while (done)
     {
         std::unique_lock<std::mutex> read_lock(mutex_Buf_Read);
         while (!read_notified)
-        { // loop to avoid spurious wakeups
+        {  
             read_cond_var.wait(read_lock);
         }
         while (!g_BufRead.empty())
@@ -210,7 +207,7 @@ void run_command()
 int main()
 {
 
-    //std::signal(SIGINT, signalHandler);
+    std::signal(SIGINT, signalHandler);
 
     int listener;
     struct sockaddr_in addr;
@@ -245,6 +242,13 @@ int main()
     if (thread_out_data.joinable())
         thread_out_data.join();
 
+
+
+    for (int client : clients)
+    {
+        close(client);
+    }
+    close(listener); //закрываем сокет сервера
     std::cout << "close server" << std::endl;
     std::signal(SIGINT, SIG_DFL);
     return 0;
