@@ -39,32 +39,50 @@ std::queue<Message> g_BufWrite;
 
 std::string exec(const char *cmd)
 {
-    char buffer[1024];
     std::string result = "";
-    FILE *pipe = popen(cmd, "r");
-    if (!pipe)
-        throw std::runtime_error("popen() failed!");
-
-    while (fgets(buffer, sizeof buffer, pipe) != NULL)
+    try
     {
-        result += buffer;
-    }
+        char buffer[1024];
 
-    pclose(pipe);
-    return result;
+        FILE *pipe = popen(cmd, "r");
+        if (!pipe)
+        {
+            throw std::runtime_error("popen() failed!");
+        }
+        while (fgets(buffer, sizeof buffer, pipe) != NULL)
+        {
+            result += buffer;
+        }
+
+        pclose(pipe);
+        return result;
+    }
+    catch (std::runtime_error &e)
+    {
+        std::string caught = e.what();
+        std::string type_name = typeid(e).name();
+        result = "popen() failed! /n Caught /n" + caught + "Type /n" + type_name;
+        return result;
+    }
 }
 
-/*void signalHandler(int signum)
+void signalHandler(int signum)
 {
     done = false;
-    std::cout << "close server" << std::endl;
-}*/
+}
 
 void in_data(int listener)
 {
-    //std::signal(SIGINT, signalHandler);
+    std::signal(SIGINT, signalHandler);
     char buf[1024];
     int bytes_read;
+    if (done == false)
+    {
+        read_notified = true;
+        write_notified = true;
+        read_cond_var.notify_one();
+        write_cond_var.notify_one();
+    }
     while (done)
     {
         // Заполняем множество сокетов
@@ -138,7 +156,7 @@ void in_data(int listener)
 }
 void out_data()
 {
-    //std::signal(SIGINT, signalHandler);
+    std::signal(SIGINT, signalHandler);
     std::string result_command;
     Message result(0, "NuN");
     int client;
@@ -162,7 +180,7 @@ void out_data()
 }
 void run_command()
 {
-    //std::signal(SIGINT, signalHandler);
+    std::signal(SIGINT, signalHandler);
     while (done)
     {
         std::unique_lock<std::mutex> read_lock(mutex_Buf_Read);
@@ -228,6 +246,6 @@ int main()
         thread_out_data.join();
 
     std::cout << "close server" << std::endl;
-
+    std::signal(SIGINT, SIG_DFL);
     return 0;
 }
