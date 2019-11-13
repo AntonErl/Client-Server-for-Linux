@@ -112,7 +112,14 @@ void in_data(int listener)
             perror("select");
             exit(3);
         }
-      
+        if (!done)
+        {
+            read_notified = true;
+            write_notified = true;
+            read_cond_var.notify_one();
+            write_cond_var.notify_one();
+            break;
+        }
 
         // Определяем тип события и выполняем соответствующие действия
         if (FD_ISSET(listener, &readset))
@@ -149,7 +156,6 @@ void in_data(int listener)
             }
         }
     }
-
 }
 void out_data()
 {
@@ -161,7 +167,7 @@ void out_data()
     {
         std::unique_lock<std::mutex> write_lock(mutex_Buf_Write);
         while (!write_notified)
-        {  
+        {
             write_cond_var.wait(write_lock);
         }
         while (!g_BufWrite.empty())
@@ -177,12 +183,12 @@ void out_data()
 }
 void run_command()
 {
-    //std::signal(SIGINT, signalHandler);
+    std::signal(SIGINT, signalHandler);
     while (done)
     {
         std::unique_lock<std::mutex> read_lock(mutex_Buf_Read);
         while (!read_notified)
-        {  
+        {
             read_cond_var.wait(read_lock);
         }
         while (!g_BufRead.empty())
@@ -241,8 +247,6 @@ int main()
         thread_run_command.join();
     if (thread_out_data.joinable())
         thread_out_data.join();
-
-
 
     for (int client : clients)
     {
