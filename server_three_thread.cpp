@@ -23,14 +23,17 @@ struct Message
         this->client = client;
         this->data = data;
     }
+    Message()
+    {
+    }
 };
 
-std::condition_variable read_cond_var;
-std::condition_variable write_cond_var;
-volatile bool done = true; //управляющая переменная для while
+volatile bool done = false; //управляющая переменная для while
 bool read_notified = false;
 bool write_notified = false;
 
+std::condition_variable read_cond_var;
+std::condition_variable write_cond_var;
 std::set<int> clients;
 std::mutex mutex_Buf_Read;
 std::mutex mutex_Buf_Write;
@@ -40,35 +43,26 @@ std::queue<Message> g_BufWrite;
 std::string exec(const char *cmd)
 {
     std::string result = "";
-    try
-    {
-        char buffer[1024];
 
-        FILE *pipe = popen(cmd, "r");
-        if (!pipe)
-        {
-            throw std::runtime_error("popen() failed!");
-        }
-        while (fgets(buffer, sizeof buffer, pipe) != NULL)
-        {
-            result += buffer;
-        }
+    char buffer[1024];
 
-        pclose(pipe);
-        return result;
-    }
-    catch (std::runtime_error &e)
+    FILE *pipe = popen(cmd, "r");
+    if (!pipe)
     {
-        std::string caught = e.what();
-        std::string type_name = typeid(e).name();
-        result = "popen() failed! /n Caught /n" + caught + "Type /n" + type_name;
-        return result;
+        result = "popen() failed!";
     }
+    while (fgets(buffer, sizeof buffer, pipe) != NULL)
+    {
+        result += buffer;
+    }
+
+    pclose(pipe);
+    return result;
 }
 
 void signalHandler(int signum)
 {
-    done = false;
+    done = true;
 }
 
 void in_data(int listener)
@@ -76,15 +70,7 @@ void in_data(int listener)
     char buf[1024];
     int bytes_read;
 
-    if (!done)
-    {
-        done = false;
-        read_notified = true;
-        write_notified = true;
-        read_cond_var.notify_one();
-        write_cond_var.notify_one();
-    }
-    while (done)
+    while (!done)
     {
         // Заполняем множество сокетов
         fd_set readset;
@@ -98,7 +84,7 @@ void in_data(int listener)
 
         // Задаём таймаут
         timespec timeout;
-        timeout.tv_sec = 4;
+        timeout.tv_sec = 1;
         timeout.tv_nsec = 0;
 
         // Ждём события в одном из сокетов
@@ -168,17 +154,18 @@ void in_data(int listener)
             }
         }
     }
+
     read_notified = true;
-    write_notified = true;
     read_cond_var.notify_one();
+
+    write_notified = true;
     write_cond_var.notify_one();
 }
 void out_data()
 {
-    std::string result_command;
-    Message result(0, "NULL");
-    int client;
-    while (done)
+
+    Message result;
+    while (!done)
     {
         std::unique_lock<std::mutex> write_lock(mutex_Buf_Write);
         while (!write_notified)
@@ -188,18 +175,15 @@ void out_data()
         while (!g_BufWrite.empty())
         {
             result = g_BufWrite.front();
-            client = result.client;
-            result_command = result.data;
+            send(result.client, result.data.c_str(), 1024, 0);
             g_BufWrite.pop();
-            send(client, result_command.c_str(), 1024, 0);
         }
         write_notified = false;
     }
 }
 void run_command()
 {
-    std::signal(SIGINT, signalHandler);
-    while (done)
+    while (!done)
     {
         std::unique_lock<std::mutex> read_lock(mutex_Buf_Read);
         while (!read_notified)
@@ -208,13 +192,14 @@ void run_command()
         }
         while (!g_BufRead.empty())
         {
-            Message result(0, "NuN");
+            Message result;
             std::string command;
             int client = 0;
             result = g_BufRead.front();
             client = result.client;
             command = result.data;
             g_BufRead.pop();
+            std::cout << "Run command: " << command << std::endl;
             std::string result_command = exec(command.c_str());
             std::unique_lock<std::mutex> write_lock(mutex_Buf_Write);
             g_BufWrite.push(Message(client, result_command));
@@ -227,7 +212,6 @@ void run_command()
 
 int main()
 {
-
     std::signal(SIGINT, signalHandler);
 
     int listener;
