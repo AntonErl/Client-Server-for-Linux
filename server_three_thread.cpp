@@ -73,11 +73,12 @@ void signalHandler(int signum)
 
 void in_data(int listener)
 {
-    //std::signal(SIGINT, signalHandler);
     char buf[1024];
     int bytes_read;
-    if (done == false)
+
+    if (!done)
     {
+        done = false;
         read_notified = true;
         write_notified = true;
         read_cond_var.notify_one();
@@ -96,28 +97,39 @@ void in_data(int listener)
         }
 
         // Задаём таймаут
-        timeval timeout;
-        timeout.tv_sec = 120;
-        timeout.tv_usec = 0;
+        timespec timeout;
+        timeout.tv_sec = 4;
+        timeout.tv_nsec = 0;
 
         // Ждём события в одном из сокетов
-        int mx = std::max(listener, *std::max_element(clients.begin(), clients.end()));
-        if (select(mx + 1, &readset, NULL, NULL, &timeout) <= 0)
+
+        sigset_t sigmask, empty_mask;
+        struct sigaction sa;
+        sigemptyset(&sigmask);
+        sigaddset(&sigmask, SIGINT);
+        if (sigprocmask(SIG_BLOCK, &sigmask, NULL) == -1)
         {
-            done = false;
-            read_notified = true;
-            write_notified = true;
-            read_cond_var.notify_one();
-            write_cond_var.notify_one();
-            perror("select");
-            exit(3);
+            perror("sigprocmask");
+            exit(EXIT_FAILURE);
         }
-        if (!done)
+        sa.sa_flags = 0;
+        sa.sa_handler = signalHandler;
+        sigemptyset(&sa.sa_mask);
+        if (sigaction(SIGINT, &sa, NULL) == -1)
         {
-            read_notified = true;
-            write_notified = true;
-            read_cond_var.notify_one();
-            write_cond_var.notify_one();
+            perror("sigaction");
+            exit(EXIT_FAILURE);
+        }
+        sigemptyset(&empty_mask);
+
+        int mx = std::max(listener, *std::max_element(clients.begin(), clients.end()));
+        int r = pselect(mx + 1, &readset, NULL, NULL, &timeout, &empty_mask);
+        if (r == 0)
+        {
+            continue;
+        }
+        if (r < 0)
+        {
             break;
         }
 
@@ -156,10 +168,13 @@ void in_data(int listener)
             }
         }
     }
+    read_notified = true;
+    write_notified = true;
+    read_cond_var.notify_one();
+    write_cond_var.notify_one();
 }
 void out_data()
 {
-    //std::signal(SIGINT, signalHandler);
     std::string result_command;
     Message result(0, "NULL");
     int client;
