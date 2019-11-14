@@ -35,25 +35,25 @@ int main(int argc, const char **argv)
     }
 
     std::string commands = "start";
+    std::getline(std::cin, commands); //Читаем данные из стандарного потока ввода в commands
     while (commands != "exit")
     {
-        std::getline(std::cin, commands);      //Читаем данные из стандарного потока ввода в commands
+
         unsigned mess_len = commands.length(); // размер данных (передаваемого сообщения)
         int bytes_read;
-        if (commands != "exit")
-        {
 
-            char buf[1024];
-            send(sock, commands.c_str(), mess_len + 1, 0);
-            bytes_read=recv(sock, buf, sizeof buf, 0);
-            if (bytes_read <= 0)
-                {
-                    // Соединение разорвано
-                    std::cout << "server close" << std::endl;
-                    break;
-                }
-            std::cout << buf << std::endl;
+        char buf[1024];
+        send(sock, commands.c_str(), mess_len + 1, 0);
+        bytes_read = recv(sock, buf, sizeof buf, 0);
+        if (bytes_read <= 0)
+        {
+            // Соединение разорвано
+            std::cout << "server close" << std::endl;
+            break;
         }
+        std::cout << buf << std::endl;
+
+        std::getline(std::cin, commands); //Читаем данные из стандарного потока ввода в commands
     }
     std::cout << "close client" << std::endl;
     close(sock);
