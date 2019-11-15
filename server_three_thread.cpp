@@ -13,6 +13,9 @@
 #include <condition_variable>
 #include <csignal>
 #include <signal.h>
+#include <errno.h>
+#include <string.h>
+ 
 
 struct Message
 {
@@ -32,9 +35,10 @@ volatile bool done = false; //управляющая переменная для
 bool read_notified = false;
 bool write_notified = false;
 
+std::set<int> clients;
+
 std::condition_variable read_cond_var;
 std::condition_variable write_cond_var;
-std::set<int> clients;
 std::mutex mutex_Buf_Read;
 std::mutex mutex_Buf_Write;
 std::queue<Message> g_BufRead;
@@ -49,7 +53,8 @@ std::string exec(const char *cmd)
     FILE *pipe = popen(cmd, "r");
     if (!pipe)
     {
-        result = "popen() failed!";
+        std::string errors = strerror(errno);
+        result = "popen() failed! /n" + errors;
     }
     while (fgets(buffer, sizeof buffer, pipe) != NULL)
     {
@@ -253,6 +258,5 @@ int main()
     }
     close(listener); //закрываем сокет сервера
     std::cout << "close server" << std::endl;
-    std::signal(SIGINT, SIG_DFL);
     return 0;
 }
